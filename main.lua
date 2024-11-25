@@ -2,8 +2,9 @@ function love.load()
     -- Window settings
     love.window.setMode(800, 600)
     
-    -- Game state
+    -- Set default font to a larger size
     gameState = {
+        font = love.graphics.newFont(20), -- Create a font for the numbers
         -- Water dimensions (now starting from 60% down)
         waterHeight = love.graphics.getHeight() * 0.4, -- reduced height since it starts lower
         waterY = love.graphics.getHeight() * 0.6, -- water starts 60% down the screen
@@ -31,13 +32,30 @@ function love.load()
         initialVelocityY = 0,
         gravity = 500, -- pixels per second squared
         linePoints = {}, -- stores points for line curve
-        finalLinePoints = nil, -- stores final line position
+        
+        -- Sinking line properties
+        isSinking = false,
+        sinkStartTime = 0,
+        sinkingSpeed = 50, -- pixels per second
+        waterHitX = 0,
+        sinkDepth = 0,
+        lineFrozen = false, -- New property to track if line should stop sinking
         
         -- Colors
         waterColor = {0, 0.5, 1, 1}, -- Blue water
         skyColor = {0.5, 0.8, 1, 1}, -- Light blue sky
         platformColor = {0.6, 0.4, 0.2, 1}, -- Brown platform
-        fishermanColor = {0, 0, 0, 1} -- Black silhouette
+        fishermanColor = {0, 0, 0, 1}, -- Black silhouette
+        
+        -- Floating squares properties
+        squares = {},
+        squareSize = 40,
+        numberTimer = 0,
+        numberUpdateInterval = 1, -- Update numbers every second
+        squareColor = {0.8, 0.8, 0.8, 1}, -- Light gray squares
+        
+        -- Line-square collision
+        lineHitSquare = false,
     }
     
     -- Calculate platform position (right side, at about halfway down)
@@ -51,6 +69,29 @@ function love.load()
     -- Starting point of the line (fishing rod tip position)
     gameState.rodTipX = gameState.fishermanX + gameState.fishermanWidth/2
     gameState.rodTipY = gameState.fishermanY + 10
+    
+    -- Create initial squares
+    local numSquares = 8 -- Number of squares to create
+    local waterWidth = love.graphics.getWidth()
+    local spacing = waterWidth / numSquares
+    
+    for i = 1, numSquares do
+        table.insert(gameState.squares, {
+            x = spacing * (i - 0.5), -- Evenly space squares across water
+            y = gameState.waterY + math.random(50, gameState.waterHeight - 50), -- Random height in water
+            number = math.random(1, 20), -- Random initial number between 1 and 20
+            bobOffset = math.random() * math.pi * 2, -- Random bobbing offset
+            bobSpeed = 0.8 + math.random() * 0.4, -- Extremely fast bobbing speed
+            baseY = 0, -- Store initial Y position
+            frozen = false, -- Track if number should stop changing
+            finalY = 0, -- Store final Y position
+        })
+    end
+    
+    -- Set initial base Y positions
+    for _, square in ipairs(gameState.squares) do
+        square.baseY = gameState.waterY + math.random(50, gameState.waterHeight - 50)
+    end
 end
 
 function calculateLinePoints(startX, startY, velocityX, velocityY, time)
@@ -71,16 +112,32 @@ function calculateLinePoints(startX, startY, velocityX, velocityY, time)
             local tWater = (-velocityY + math.sqrt(velocityY^2 - 2 * gameState.gravity * (startY - gameState.waterY))) / gameState.gravity
             waterHitX = startX + velocityX * tWater
             hasHitWater = true
+            
+            -- Store water hit position for sinking animation
+            if not gameState.isSinking then
+                gameState.waterHitX = waterHitX
+                gameState.isSinking = true
+                gameState.sinkStartTime = love.timer.getTime()
+                gameState.sinkDepth = 0
+            end
         end
         
-        -- If we've hit the water, maintain the water level Y position
+        -- If we've hit the water, draw the sinking line
         if hasHitWater then
-            -- Draw a straight line in the water from the hit point
-            local waterLineLength = 20 -- length of line segment in water
+            -- Calculate current sink depth only if line is not frozen
+            if gameState.isSinking and not gameState.lineFrozen then
+                local sinkTime = love.timer.getTime() - gameState.sinkStartTime
+                gameState.sinkDepth = math.min(
+                    gameState.sinkingSpeed * sinkTime,
+                    gameState.waterHeight - 20 -- Stop 20 pixels from bottom
+                )
+            end
+            
+            -- Draw the line from water surface to current depth
             table.insert(points, waterHitX)
             table.insert(points, gameState.waterY)
-            table.insert(points, waterHitX - waterLineLength) -- extend slightly left in water
-            table.insert(points, gameState.waterY + 10) -- slightly down in water
+            table.insert(points, waterHitX)
+            table.insert(points, gameState.waterY + gameState.sinkDepth)
             break
         else
             table.insert(points, x)
@@ -91,7 +148,57 @@ function calculateLinePoints(startX, startY, velocityX, velocityY, time)
     return points
 end
 
+function checkLineSquareCollision(lineX, lineY, square)
+    -- Check if line point is within square bounds
+    local halfSize = gameState.squareSize / 2
+    return lineX >= square.x - halfSize and
+           lineX <= square.x + halfSize and
+           lineY >= square.y - halfSize and
+           lineY <= square.y + halfSize
+end
+
 function love.update(dt)
+    -- Update number timer
+    gameState.numberTimer = gameState.numberTimer + dt
+    
+    -- Update numbers every second
+    if gameState.numberTimer >= gameState.numberUpdateInterval then
+        gameState.numberTimer = gameState.numberTimer - gameState.numberUpdateInterval
+        -- Update all square numbers except those hit by the line
+        for _, square in ipairs(gameState.squares) do
+            if not square.frozen then
+                square.number = math.random(1, 20)
+            end
+        end
+    end
+    
+    -- Update square bobbing motion
+    for _, square in ipairs(gameState.squares) do
+        if not square.frozen then
+            -- Only update position if square is not frozen
+            -- Use stored baseY for more stable bobbing
+            square.y = square.baseY + math.sin(love.timer.getTime() * square.bobSpeed + square.bobOffset) * 25 -- Extreme amplitude
+            
+            -- Add secondary wave motion for more chaos
+            square.y = square.y + math.cos(love.timer.getTime() * (square.bobSpeed * 0.7) + square.bobOffset * 1.5) * 10
+        else
+            -- If square is frozen, set its position to the final position
+            square.y = square.finalY
+        end
+        
+        -- Check for line collision if line is in water and not already frozen
+        if gameState.isSinking and not square.frozen and not gameState.lineFrozen then
+            if checkLineSquareCollision(gameState.waterHitX, gameState.waterY + gameState.sinkDepth, square) then
+                square.frozen = true -- Freeze the square's number and position
+                gameState.lineFrozen = true -- Stop the line from sinking further
+                -- Store the final position of the square
+                square.finalY = square.y
+                print("Hit square with number: " .. square.number) -- Debug output
+            end
+        end
+    end
+    
+    -- Original casting logic
     if gameState.isCasting then
         local mouseX, mouseY = love.mouse.getPosition()
         -- Calculate casting vector
@@ -117,10 +224,8 @@ function love.update(dt)
                 1.0  -- Increased preview time
             )
         end
-    elseif gameState.isAnimating then
-        gameState.castTime = gameState.castTime + dt
-        
-        -- Calculate current line position
+    elseif gameState.isAnimating or gameState.isSinking then
+        -- Continue updating line points for sinking animation
         gameState.linePoints = calculateLinePoints(
             gameState.rodTipX,
             gameState.rodTipY,
@@ -129,16 +234,9 @@ function love.update(dt)
             gameState.castTime
         )
         
-        -- Check if line has hit water (last Y position is at water level)
-        local lastY = gameState.linePoints[#gameState.linePoints]
-        if lastY >= gameState.waterY then
-            gameState.isAnimating = false
-            -- Store final line position
-            gameState.finalLinePoints = gameState.linePoints
+        if gameState.isAnimating then
+            gameState.castTime = gameState.castTime + dt
         end
-    elseif gameState.finalLinePoints then
-        -- Keep drawing the final line position
-        gameState.linePoints = gameState.finalLinePoints
     end
 end
 
@@ -151,6 +249,27 @@ function love.draw()
     love.graphics.setColor(gameState.waterColor)
     love.graphics.rectangle('fill', 0, gameState.waterY, 
         love.graphics.getWidth(), gameState.waterHeight)
+    
+    -- Draw squares
+    love.graphics.setFont(gameState.font)
+    for _, square in ipairs(gameState.squares) do
+        -- Draw square
+        love.graphics.setColor(gameState.squareColor)
+        love.graphics.rectangle('fill', 
+            square.x - gameState.squareSize/2, 
+            square.y - gameState.squareSize/2, 
+            gameState.squareSize, 
+            gameState.squareSize)
+            
+        -- Draw number
+        love.graphics.setColor(0, 0, 0, 1) -- Black text
+        local number = tostring(square.number)
+        local textW = gameState.font:getWidth(number)
+        local textH = gameState.font:getHeight()
+        love.graphics.print(number, 
+            square.x - textW/2, 
+            square.y - textH/2)
+    end
     
     -- Draw platform
     love.graphics.setColor(gameState.platformColor)
@@ -182,6 +301,16 @@ function love.mousereleased(x, y, button, istouch, presses)
     if button == 1 and gameState.isCasting then  -- Left mouse button
         gameState.isCasting = false
         
+        -- Reset sinking state
+        gameState.isSinking = false
+        gameState.sinkDepth = 0
+        gameState.lineFrozen = false -- Reset line frozen state
+        
+        -- Reset all squares' frozen state for new cast
+        for _, square in ipairs(gameState.squares) do
+            square.frozen = false
+        end
+        
         -- Calculate initial velocity based on drag distance and direction
         local speed = math.sqrt(
             (x - gameState.castStartX)^2 + 
@@ -195,6 +324,5 @@ function love.mousereleased(x, y, button, istouch, presses)
         -- Start animation
         gameState.isAnimating = true
         gameState.castTime = 0
-        gameState.finalLinePoints = nil -- Clear any previous final line
     end
 end
