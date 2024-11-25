@@ -56,6 +56,16 @@ function love.load()
         
         -- Line-square collision
         lineHitSquare = false,
+        
+        -- Die animation properties
+        showDie = false,
+        dieNumber = 1,
+        dieSize = 150, -- Large die size
+        dieUpdateTimer = 0,
+        dieUpdateInterval = 0.1, -- Update die number every 0.1 seconds
+        dieColor = {1, 1, 1, 1}, -- White die
+        dieOutlineColor = {0, 0, 0, 1}, -- Black outline
+        dieTextColor = {0, 0, 0, 1}, -- Black text
     }
     
     -- Calculate platform position (right side, at about halfway down)
@@ -193,8 +203,20 @@ function love.update(dt)
                 gameState.lineFrozen = true -- Stop the line from sinking further
                 -- Store the final position of the square
                 square.finalY = square.y
+                -- Start die animation
+                gameState.showDie = true
+                gameState.dieNumber = math.random(1, 20)
                 print("Hit square with number: " .. square.number) -- Debug output
             end
+        end
+    end
+    
+    -- Update rolling die animation
+    if gameState.showDie then
+        gameState.dieUpdateTimer = gameState.dieUpdateTimer + dt
+        if gameState.dieUpdateTimer >= gameState.dieUpdateInterval then
+            gameState.dieUpdateTimer = gameState.dieUpdateTimer - gameState.dieUpdateInterval
+            gameState.dieNumber = math.random(1, 20)
         end
     end
     
@@ -286,14 +308,74 @@ function love.draw()
         love.graphics.setColor(0, 0, 0, 1)
         love.graphics.line(gameState.linePoints)
     end
+    
+    -- Draw the die if it's showing
+    if gameState.showDie then
+        -- Draw semi-transparent background overlay
+        love.graphics.setColor(0, 0, 0, 0.5)
+        love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
+        
+        -- Calculate die position (center of screen)
+        local screenCenterX = love.graphics.getWidth() / 2
+        local screenCenterY = love.graphics.getHeight() / 2
+        
+        -- Draw die background (white square with black outline)
+        love.graphics.setColor(gameState.dieColor)
+        love.graphics.rectangle("fill", 
+            screenCenterX - gameState.dieSize/2,
+            screenCenterY - gameState.dieSize/2,
+            gameState.dieSize,
+            gameState.dieSize,
+            10, -- rounded corners
+            10
+        )
+        
+        -- Draw die outline
+        love.graphics.setColor(gameState.dieOutlineColor)
+        love.graphics.setLineWidth(3)
+        love.graphics.rectangle("line",
+            screenCenterX - gameState.dieSize/2,
+            screenCenterY - gameState.dieSize/2,
+            gameState.dieSize,
+            gameState.dieSize,
+            10, -- rounded corners
+            10
+        )
+        
+        -- Draw die number
+        love.graphics.setColor(gameState.dieTextColor)
+        local font = love.graphics.newFont(gameState.dieSize/2) -- Large font size
+        love.graphics.setFont(font)
+        local text = tostring(gameState.dieNumber)
+        local textW = font:getWidth(text)
+        local textH = font:getHeight()
+        love.graphics.print(
+            text,
+            screenCenterX - textW/2,
+            screenCenterY - textH/2
+        )
+        
+        -- Reset font
+        love.graphics.setFont(love.graphics.newFont(14))
+    end
+    
+    -- Reset color
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 function love.mousepressed(x, y, button, istouch, presses)
     if button == 1 then  -- Left mouse button
-        gameState.isCasting = true
-        gameState.castStartX = x
-        gameState.castStartY = y
-        gameState.linePoints = {}
+        if gameState.showDie then
+            -- Stop die animation when clicked
+            gameState.showDie = false
+            gameState.dieUpdateTimer = 0
+        elseif not gameState.isCasting then
+            -- Start casting only if we're not showing the die
+            gameState.isCasting = true
+            gameState.castStartX = x
+            gameState.castStartY = y
+            gameState.linePoints = {}
+        end
     end
 end
 
@@ -305,6 +387,7 @@ function love.mousereleased(x, y, button, istouch, presses)
         gameState.isSinking = false
         gameState.sinkDepth = 0
         gameState.lineFrozen = false -- Reset line frozen state
+        gameState.showDie = false -- Make sure die is hidden for new cast
         
         -- Reset all squares' frozen state for new cast
         for _, square in ipairs(gameState.squares) do
